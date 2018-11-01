@@ -1,18 +1,126 @@
 <?php
-
 use Bitrix\Main\GroupTable;
 use Bitrix\Main\UserTable;
 
+/* Данный файл взят с рабочего сайта в качестве класса обработчика событий, связанных с изменениями данных о пользователях.
+Первые два метода - рефакторинг, третий - пятые методы мои, остальные осталось как наследие от прошлых разработчиков.
+
+Внимание! В данном файле нарушено правило отображения сперва публичных, затем приватных методов, 
+а также правило комментирования только на английском языке. Это сделано для большей наглядности.
+Как он выглядел изначально всегда можно посмотреть в истории изменений.
+ */
+ 
 class UserHelper
 {
 
-	//Usoft
-	public static function isUserInManagerGroup(){
+	//Здесь был небольшой рефакторинг чужого кода
+    public static function getUserStatus(string $needType = 'NAME')
+    {
+        $status = '';
+
+        global $USER;
+        if ($USER->IsAuthorized()) {
+            $cosmetologistUsersGroups = json_decode(COSMETOLOGIST_USERS_GROUPS);
+            $result = GroupTable::getList([
+                'select' => ['NAME', 'ID'],
+                'filter' => [
+                    '=UserGroup:GROUP.USER_ID' => $USER->GetID(),
+                    '=ACTIVE' => 'Y',
+                    'ID' => $cosmetologistUsersGroups,
+                ],
+                'order' => 'ID',
+            ]);
+
+			//Изменение коснулось вот этого блока, ранее возвращался только NAME, чтобы не создавать доп метод для возврата ID
+            if ($row = $result->fetch()) {
+                if ($needType == 'ID') $status = intval($row['ID']);
+				else $status = $row['NAME'];
+            }
+        }
+
+        return $status;
+    }
+
+	//Рефакторинг
+    public static function beforeUpdate(&$arFields)
+    {
+        global $USER;
+        global $isSync;//Чужой код! Я таких вещейн не допускаю, но убрать её сейчас действительно сложно.
+		
+        if ($arFields["ID"] == $USER->GetID() && !$isSync /* Чужой код ! */) {
+			
+/* 			Вот это замена моя. Вместо множества условий , закомментированных ниже, которые, кстати, работают неверно
+			вставляется единственный почти универсальный метод, позволяющий учесть расширение пользовательских полей на будущее.
+ */			
+            if (self::isUserDocumentsChanged($arFields, $errorOnly = false) 
+				
+/*              !$arFields['UF_CERT_COSMETOLOG']['error'] || $arFields['UF_CERT_COSMETOLOG']['del'] ||
+                !$arFields['UF_CERT_EDUCATION']['error'] || $arFields['UF_CERT_EDUCATION']['del'] ||
+                !$arFields['UF_CERT_COURSES']['error'] || $arFields['UF_CERT_COURSES']['del'] ||
+                !$arFields['UF_PASSPORT']['error'] || $arFields['UF_PASSPORT']['del']
+				
+ */         ) {
+				
+                if (!self::isUserInManagerGroup()) $arFields['UF_NEED_CHECK'] = true;
+                if (self::isChecked($arFields["ID"])) {
+                    $eventFields = [
+                        'USER_ID' => $arFields['ID'],
+                        'EMAIL' => $arFields['EMAIL'],
+                        'LOGIN' => $arFields['LOGIN'],
+                    ];
+                    CEvent::Send("NEED_CHECK_USER", 's1', $eventFields, "Y", 88);
+                }
+            }
+        }
+        self::isChangeGroup($arFields['ID'], $arFields['GROUP_ID']);//What is this ?
+    }
+
+	//Полностью мой код
+	public static function isUserInManagerGroup()
+	{
 		global $USER;
 		if (!$userID = $USER->GetID()) return false;
 		$userGroups = $USER->GetUserGroup($userID);
-		return !!array_intersect($userGroups, array(1, 12)); //Admin, Manager
+		return !!array_intersect($userGroups, array(1, 12)); //Admin, Manager groups, should some controller in future.
 	}
+
+	//Usoft, firstbitrix@ya.ru, Determines user documents change, 2018-10-31
+	private static function isUserDocumentsChanged(&$arFields, $errorOnly = true)
+	{
+		$checkErrors = false;
+		$fieldsToCheck = self::getUserDocumentFields();
+		$documentsChanged = false;
+		$isError = false;
+		
+		foreach($fieldsToCheck as $fieldToCheck){
+			foreach($arFields[$fieldToCheck] as $someKey => $fieldValues) {
+				if ($fieldValues['error']) $isError = true;
+				if (!$errorOnly) {
+					if ($fieldValues['name']) 	$documentsChanged = true;
+					if ($fieldValues['del']) 	$documentsChanged = true;
+				}//!$errorOnly
+			}//fieldToCheck
+		}//fieldsToCheck
+		
+		if ($checkErrors && $isError) $documentsChanged = false;
+		return $documentsChanged;
+	}
+	
+	//Usoft. To get ALL user documents, wich may change in future
+	private static function getUserDocumentFields()
+	{
+		global $DB;
+		$result = $DB->Query("SELECT `FIELD_NAME` FROM `b_user_field` WHERE `ENTITY_ID` = 'USER' AND (`FIELD_NAME` = 'UF_PASSPORT' OR `FIELD_NAME` LIKE '%_CERT_%')");
+		
+		while($fieldName = $result->Fetch()) {
+			$arResult[] = $fieldName["FIELD_NAME"];
+		}
+		return $arResult;
+	}	
+
+	// --------------
+	//Далее чужой код
+	// --------------
 	
     public static function isCosmetologist($userID)
     {
@@ -22,7 +130,7 @@ class UserHelper
         return !empty(array_intersect($cosmetologistUsersGroups, $userGroups));
     }
 	
-	//Docs list from 29 Iblock to show in register and User profile
+	//Docs list from 29 Iblock to show it in register and User profile
 	public static function getUserDocsArray($userID = false, $userStatusID = false): array
 	{
 		if (!$userID) {
@@ -48,32 +156,6 @@ class UserHelper
 	{
 		return self::getUserStatus('ID');
 	}
-	
-    public static function getUserStatus(string $needType = 'NAME')
-    {
-        $status = '';
-
-        global $USER;
-        if ($USER->IsAuthorized()) {
-            $cosmetologistUsersGroups = json_decode(COSMETOLOGIST_USERS_GROUPS);
-            $result = GroupTable::getList([
-                'select' => ['NAME', 'ID'],
-                'filter' => [
-                    '=UserGroup:GROUP.USER_ID' => $USER->GetID(),
-                    '=ACTIVE' => 'Y',
-                    'ID' => $cosmetologistUsersGroups,
-                ],
-                'order' => 'ID',
-            ]);
-
-            if ($row = $result->fetch()) {
-                if ($needType == 'ID') $status = intval($row['ID']);
-				else $status = $row['NAME'];
-            }
-        }
-
-        return $status;
-    }
 
     public static function isChecked($userID = 0)
     {
@@ -113,7 +195,7 @@ class UserHelper
         }
         return null;
     }
-
+	
     public static function isChangeGroup($userId, $groupArr)
     {
         global $isChangeGroup;
@@ -138,7 +220,7 @@ class UserHelper
     public static function beforeAdd(&$arFields)
     {
         global $isSync;
-        if (!$isSync) { //эту каку надо убарть фу фуфуфуфу
+        if (!$isSync) { 
             if (
                 !$arFields['UF_CERT_COSMETOLOG']['error'] ||
                 !$arFields['UF_CERT_EDUCATION']['error'] ||
@@ -158,38 +240,6 @@ class UserHelper
         }
     }
 
-    public static function beforeUpdate(&$arFields)
-    {
-        global $USER;
-		//Как оказалось, это переменная для проверки миграции пользователей. ЧТобы не включать это событие при миграции! Usoft
-        global $isSync;
-        //проверим, что юзер обновляет свои данные
-        if ($arFields["ID"] == $USER->GetID() && !$isSync) {
-			
-			//the substitution for all underlying stuff because of document fields may change 
-            if (self::isUserDocumentsChanged($arFields, $errorOnly = false)
-				
-/*              !$arFields['UF_CERT_COSMETOLOG']['error'] || $arFields['UF_CERT_COSMETOLOG']['del'] ||
-                !$arFields['UF_CERT_EDUCATION']['error'] || $arFields['UF_CERT_EDUCATION']['del'] ||
-                !$arFields['UF_CERT_COURSES']['error'] || $arFields['UF_CERT_COURSES']['del'] ||
-                !$arFields['UF_PASSPORT']['error'] || $arFields['UF_PASSPORT']['del']
-				
- */         ) {
-				
-                if (!self::isUserInManagerGroup()) $arFields['UF_NEED_CHECK'] = true;
-                if (self::isChecked($arFields["ID"])) {
-                    $eventFields = [
-                        'USER_ID' => $arFields['ID'],
-                        'EMAIL' => $arFields['EMAIL'],
-                        'LOGIN' => $arFields['LOGIN'],
-                    ];
-                    CEvent::Send("NEED_CHECK_USER", 's1', $eventFields, "Y", 88);
-                }
-            }
-        }
-        self::isChangeGroup($arFields['ID'], $arFields['GROUP_ID']);//What is this ?
-    }
-
     public static function inCosmetologistId($groupID)
     {
         $cosmetologistUsersGroups = json_decode(COSMETOLOGIST_USERS_GROUPS);
@@ -206,7 +256,7 @@ class UserHelper
             'USER_NAME' => ("$arFields[NAME] $arFields[LAST_NAME]") ?: $arFields['LOGIN'],
         ];
         global $isSync;
-        if (!$isSync) { //эту каку надо убарть фу фуфуфуфу
+        if (!$isSync) { 
             CEvent::Send("REGISTER_NEW_USER", 's1', $eventFields);
         } else {
 //            CEvent::SendImmediate("MOVED_OLD_USER", 's1', $eventFields);
@@ -216,7 +266,7 @@ class UserHelper
     public static function afterUpdate(&$arFields)
     {
         global $isSync;
-        if (!$isSync) { //эту каку надо убарть фу фуфуфуфу
+        if (!$isSync) { 
             if (self::isCosmetologist($arFields['ID']) && self::isChecked($arFields["ID"]) && self::checkChangeGroup()) {
                 foreach ($arFields['GROUP_ID'] as $group) {
                     if (self::inCosmetologistId($group['GROUP_ID'])) {
@@ -267,36 +317,4 @@ class UserHelper
             return null;
         }
     }
-	
-	//Usoft, firstbitrix@ya.ru, Determines user documents change, 2018-10-31
-	private static function isUserDocumentsChanged(&$arFields, $errorOnly = true){
-		
-		$checkErrors = false;//it show error #4, but I don't know wtf and where it look for. Please check https://dev.1c-bitrix.ru/community/webdev/user/152742/blog/32467/
-		
-		$fieldsToCheck = self::getUserDocumentFields();
-		$documentsChanged = false;
-		$isError = false;
-		foreach($fieldsToCheck as $fieldToCheck){
-			foreach($arFields[$fieldToCheck] as $someKey => $fieldValues) {
-				//var_dump($fieldValues);
-				if ($fieldValues['error']) $isError = true;
-				if (!$errorOnly) {
-					if ($fieldValues['name']) 	$documentsChanged = true;
-					if ($fieldValues['del']) 	$documentsChanged = true;
-				}//!$errorOnly
-			}//fieldToCheck
-		}//fieldsToCheck
-		if ($checkErrors && $isError) $documentsChanged = false;
-		return $documentsChanged;
-	}
-	
-	//Usoft. To get all user documents, wich may change in future
-	private static function getUserDocumentFields(){
-		global $DB;
-		$result = $DB->Query("SELECT `FIELD_NAME` FROM `b_user_field` WHERE `ENTITY_ID` = 'USER' AND (`FIELD_NAME` = 'UF_PASSPORT' OR `FIELD_NAME` LIKE '%_CERT_%')");
-		while($fieldName = $result->Fetch()){
-			$arResult[] = $fieldName["FIELD_NAME"];
-		}
-		return $arResult;
-	}
 }
