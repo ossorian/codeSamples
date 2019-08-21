@@ -1,0 +1,22 @@
+div#main{
+	width:640px;
+	padding: 20px;
+	background-color: #EEE;
+	border: 5px double;
+}
+
+div#main div{padding-bottom:20px;}
+
+input[type="button"]{cursor:pointer;}
+
+table#mainResults{
+	background-color: #F8F8F8;
+}
+
+table#mainResults th{
+	background-color:#DDD;
+}
+
+table td{
+	text-align:center
+}
