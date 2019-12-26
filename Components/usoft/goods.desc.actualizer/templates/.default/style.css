@@ -1,0 +1,12 @@
+#actualizer_block{
+	width:100%;
+	text-align:center;
+	padding: 20px;
+    border: 1px solid gray;
+    margin: 10px;
+}
+
+#actualizer_result, #actualizer_done{
+	display:none;
+	padding-top: 30px;
+}
